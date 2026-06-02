@@ -12,6 +12,7 @@ const HTML_CONTENT = `
         input, textarea, button { width: 100%; box-sizing: border-box; margin-bottom: 10px; padding: 10px; border-radius: 4px; border: 1px solid #ccc; font-size: 16px; }
         button { background-color: #0051c3; color: white; border: none; cursor: pointer; font-weight: bold; padding: 12px; }
         button:hover { background-color: #003a8c; }
+        button:disabled { background-color: #999; cursor: not-allowed; }
         .result { padding: 15px; background-color: #e6f2ff; border-left: 4px solid #0051c3; margin-top: 10px; display: none; white-space: pre-wrap; line-height: 1.6; }
         .loading { display: none; color: #666; font-style: italic; margin-top: 10px; }
     </style>
@@ -23,26 +24,28 @@ const HTML_CONTENT = `
         <h3>第一步：求签问势 (开启话题)</h3>
         <input type="text" id="targetName" placeholder="Ta的姓名/昵称">
         <input type="text" id="targetInfo" placeholder="Ta的生日/星座/生肖 (选填)">
-        <button onclick="startChat()">测算今日话题</button>
-        <div id="startLoading" class="loading">正在请AI起卦推演...</div>
+        <button id="btnStart" onclick="startChat()">测算今日话题</button>
+        <div id="startLoading" class="loading">正在请AI起卦推演，请稍候...</div>
         <div id="startResult" class="result"></div>
     </div>
 
     <div class="card">
         <h3>第二步：见招拆招 (分析回复)</h3>
         <textarea id="targetReply" rows="4" placeholder="将对方的回复复制到这里..."></textarea>
-        <button onclick="analyzeReply()">分析意图与生成回复</button>
-        <div id="replyLoading" class="loading">正在分析字里行间的意图...</div>
+        <button id="btnReply" onclick="analyzeReply()">分析意图与生成回复</button>
+        <div id="replyLoading" class="loading">正在分析字里行间的意图，请稍候...</div>
         <div id="replyResult" class="result"></div>
     </div>
 
     <script>
-        async function apiCall(endpoint, payload, resultElementId, loadingElementId) {
+        async function apiCall(endpoint, payload, resultElementId, loadingElementId, btnId) {
             const resultEl = document.getElementById(resultElementId);
             const loadingEl = document.getElementById(loadingElementId);
+            const btnEl = document.getElementById(btnId);
             
             resultEl.style.display = 'none';
             loadingEl.style.display = 'block';
+            btnEl.disabled = true;
             
             try {
                 const response = await fetch(endpoint, {
@@ -52,7 +55,6 @@ const HTML_CONTENT = `
                 });
                 const data = await response.json();
                 
-                // 强制校验防御
                 if (data && data.response) {
                     resultEl.innerText = data.response;
                 } else {
@@ -64,6 +66,7 @@ const HTML_CONTENT = `
                 resultEl.style.display = 'block';
             } finally {
                 loadingEl.style.display = 'none';
+                btnEl.disabled = false;
             }
         }
 
@@ -71,13 +74,13 @@ const HTML_CONTENT = `
             const name = document.getElementById('targetName').value;
             const info = document.getElementById('targetInfo').value;
             if(!name) return alert("请输入对方姓名");
-            apiCall('/api/init', { name, info }, 'startResult', 'startLoading');
+            apiCall('/api/init', { name, info }, 'startResult', 'startLoading', 'btnStart');
         }
 
         function analyzeReply() {
             const reply = document.getElementById('targetReply').value;
             if(!reply) return alert("请输入对方的回复");
-            apiCall('/api/reply', { reply }, 'replyResult', 'replyLoading');
+            apiCall('/api/reply', { reply }, 'replyResult', 'replyLoading', 'btnReply');
         }
     </script>
 </body>
@@ -100,7 +103,9 @@ export default {
             if (request.method === 'POST' && url.pathname === '/api/init') {
                 const { name, info } = await request.json();
                 const systemPrompt = "你是一个精通易经、六爻和梅花易数的高情商社交专家。请结合玄学理论，推算出适合今天开启聊天的安全且有趣的话题。";
-                const userPrompt = `今天日期是${new Date().toLocaleDateString()}。我想要给名为“${name}”的人（信息：${info || '未知'}）发消息打招呼。
+                // 使用 Worker 运行时的当前日期
+                const today = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
+                const userPrompt = `今天日期是${today}。我想要给名为“${name}”的人（信息：${info || '未知'}）发消息打招呼。
                 请输出：
                 1. 【今日卦象】：简述一个卦象及解释。
                 2. 【宜聊话题】：2-3个具体的话题方向。
@@ -134,22 +139,40 @@ export default {
     }
 };
 
-// 核心功能：安全提取不同 AI 模型的文本输出
+// 核心功能：安全提取不同 AI 模型的文本输出 (修复嵌套 JSON 暴露问题)
 function extractAIOutput(aiResponse) {
     if (!aiResponse) return "未收到AI返回结果";
+    
+    // 1. 纯文本格式
     if (typeof aiResponse === 'string') return aiResponse;
+
+    // 2. 适配 OpenAI 兼容格式 (解决带有 reasoning 的模型返回巨型 JSON 的问题)
+    if (aiResponse.choices && Array.isArray(aiResponse.choices) && aiResponse.choices.length > 0) {
+        const firstChoice = aiResponse.choices[0];
+        if (firstChoice.message && firstChoice.message.content) {
+            return String(firstChoice.message.content);
+        }
+    }
+
+    // 3. 适配常规 Cloudflare 扁平格式
     if (aiResponse.response) return String(aiResponse.response);
     if (aiResponse.result) return String(aiResponse.result);
-    // 如果都不匹配，将其序列化返回，避免出现 undefined
-    return JSON.stringify(aiResponse);
+
+    // 4. 终极兜底
+    try {
+        return JSON.stringify(aiResponse, null, 2).substring(0, 500) + "\n...[因格式异常截断]"; 
+    } catch (e) {
+        return "数据解析异常，无法读取内容。";
+    }
 }
 
 // 封装具备 Fallback (自动降级) 机制的 AI 调用逻辑
 async function callAI(env, systemPrompt, userPrompt) {
+    // 从 wrangler.toml 的 [vars] 中读取，若未读取到则使用硬编码兜底
     const primaryModel = env.PRIMARY_MODEL || '@cf/google/gemma-4-26b-a4b-it';
     const fallbackModel = env.FALLBACK_MODEL || '@cf/qwen/qwen3-30b-a3b-fp8'; 
 
-    // 关键修正：严格遵循 System + User 的对话体例
+    // 严格遵循 System + User 的对话体例
     const messages = [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -170,7 +193,7 @@ async function callAI(env, systemPrompt, userPrompt) {
             const cleanFallbackText = extractAIOutput(fallbackRawResponse);
             
             return new Response(JSON.stringify({ 
-                response: cleanFallbackText + "\n\n(注：主模型暂不可用，当前为备用模型生成结果)" 
+                response: cleanFallbackText + "\n\n(注：当前为备用模型生成结果)" 
             }), {
                 headers: { 'Content-Type': 'application/json;charset=UTF-8' }
             });
