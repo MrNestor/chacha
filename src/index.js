@@ -119,18 +119,38 @@ export default {
     }
 };
 
-// 封装 AI 调用逻辑
+// 封装具备 Fallback (自动降级) 机制的 AI 调用逻辑
 async function callAI(env, systemPrompt) {
+    // 从环境变量读取模型配置，若未配置则提供默认硬编码兜底
+    const primaryModel = env.PRIMARY_MODEL || '@cf/meta/llama-3-8b-instruct';
+    const fallbackModel = env.FALLBACK_MODEL || '@cf/meta/llama-2-7b-chat-int8'; 
+
+    const messages = [
+        { role: "system", content: systemPrompt }
+    ];
+
     try {
-        const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
-            messages: [
-                { role: "system", content: systemPrompt }
-            ]
-        });
+        // 尝试调用主模型
+        const response = await env.AI.run(primaryModel, { messages });
         return new Response(JSON.stringify({ response: response.response }), {
             headers: { 'Content-Type': 'application/json;charset=UTF-8' }
         });
     } catch (e) {
-        return new Response(JSON.stringify({ response: "AI调用出错: " + e.message }), { status: 500 });
+        console.warn(`主模型 ${primaryModel} 调用失败 (可能是5028废弃): ${e.message}。正在启动 Fallback 机制...`);
+        
+        try {
+            // 主模型报错，启动兜底模型调用
+            const fallbackResponse = await env.AI.run(fallbackModel, { messages });
+            return new Response(JSON.stringify({ 
+                response: fallbackResponse.response + "\n\n(注：主模型暂不可用，当前为备用模型生成结果)" 
+            }), {
+                headers: { 'Content-Type': 'application/json;charset=UTF-8' }
+            });
+        } catch (fallbackError) {
+            // 双重模型均不可用，抛出彻底失败信息
+            return new Response(JSON.stringify({ 
+                response: `核心调用失败: 无法连接到任何可用的 AI 模型。详细错误: ${fallbackError.message}` 
+            }), { status: 500 });
+        }
     }
 }
