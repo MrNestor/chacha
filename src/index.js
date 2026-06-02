@@ -122,7 +122,7 @@ export default {
 // 封装 AI 调用逻辑
 async function callAI(env, systemPrompt) {
     try {
-        const response = await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
+        const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
             messages: [
                 { role: "system", content: systemPrompt }
             ]
