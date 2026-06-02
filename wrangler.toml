@@ -1,4 +1,4 @@
-name = "social-ai-assistant"
+name = "chat"
 main = "src/index.js"
 compatibility_date = "2024-05-01"
 
