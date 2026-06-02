@@ -4,3 +4,9 @@ compatibility_date = "2024-05-01"
 
 [ai]
 binding = "AI"
+
+[vars]
+# 首选模型 (建议填入 CF 后台当前最新活跃的 Qwen 或 Llama 模型 ID)
+PRIMARY_MODEL = "@cf/meta/llama-3-8b-instruct"
+# 兜底模型 (建议填入官方最基础、存活周期最长的模型 ID)
+FALLBACK_MODEL = "@cf/meta/llama-2-7b-chat-int8"
